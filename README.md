@@ -4,7 +4,7 @@ Welcome to the `EnsModFramework` package repository, a comprehensive toolkit for
 
 ## Introduction
 
-The `EnsModFramework` brings together advanced modeling techniques such as Maxent, Generalized Linear Models (GLM), Generalized Additive Models (GAM), Random Forest, and Boosted Regression Trees (BRT). It is specifically tailored for handling climatic, soil, and topographic data in conjunction with species occurrence data, making it a powerful tool for both novice and experienced researchers in habitat suitability modeling.
+The `EnsModFramework` brings together advanced modeling techniques such as Maxent, Generalized Linear Models (GLM), Generalized Additive Models (GAM), Random Forest, and Boosted Regression Trees (BRT). It is specifically tailored for handling climatic, soil, and topographic data in conjunction with species occurrence data, making it a powerful tool for both novice and experienced researchers in habitat suitability modeling. The package also includes advanced features for Extrapolation Risk Assessment, Data Evaluation, and generating Ensemble Predictions, enhancing the robustness and accuracy of the analyses.
 
 ## Project Status
 
@@ -17,3 +17,18 @@ To get started with `EnsModFramework`, clone this repository and install the nec
 ```bash
 git clone https://github.com/yourgithub/EnsModFramework.git
 cd EnsModFramework
+
+## Contact
+
+For any inquiries, please contact Jonathan Ruhm at joruhm@googlemail.com.
+
+## License
+
+EnsModFramework is freely available under the MIT License. See the LICENSE file for more details.
+
+## Contributing
+
+Contributions to EnsModFramework are welcome! Please refer to the CONTRIBUTING.md file for guidelines on how to contribute to this project.
+Support
+
+If you need help or have any questions, please open an issue on this GitHub repository.
