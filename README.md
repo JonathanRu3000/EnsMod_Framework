@@ -17,6 +17,7 @@ To get started with `EnsModFramework`, clone this repository and install the nec
 ```bash
 git clone https://github.com/yourgithub/EnsModFramework.git
 cd EnsModFramework
+```
 
 ## Contact
 
