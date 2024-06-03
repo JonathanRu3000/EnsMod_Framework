@@ -1,0 +1,365 @@
+---
+title: "tutorial_EnsModFramework"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{tutorial_EnsModFramework}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+## Introduction
+
+This tutorial serves as a comprehensive guide to using the **EnsModFramework** package, a versatile toolkit for habitat suitability modeling. The package integrates various techniques and methods tailored specifically for environmental data analysis, including climatic, soil, and topographic information combined with species occurrence data.
+
+The **EnsModFramework** package compiles an array of modeling techniques such as Maxent, Generalized Linear Models (GLM), Generalized Additive Models (GAM), Random Forest, and Boosted Regression Trees (BRT). Each method has been fine-tuned to address known issues in habitat suitability modeling, making this package a valuable resource for both experienced researchers and beginners. It provides users with tools for data preparation and enables the creation of ensemble models that leverage the strengths of each modeling technique.
+
+By using **EnsModFramework**, practitioners can harness a comprehensive framework that simplifies the complexity of habitat suitability analyses, ensuring that they can focus more on interpreting results and less on managing technical intricacies.
+
+
+## Setup
+
+First, ensure all necessary R packages are installed and loaded. These packages facilitate data manipulation, spatial analysis, and model fitting, essential for processing and analyzing ecological data.
+
+```{r setup-packages, message=FALSE}
+# Listing required packages
+packages <- c(
+  "dplyr", "sp", "geodata","ade4", "ecospat","doParallel", "foreach", "terra", "caret", "dismo", "randomForest", "purrr", 
+  "ranger", "sf", "stringr", "reshape2", "tidyr", "ggpubr", "ggplot2",
+  "Matrix", "myspatial", "pROC", "ENMeval", "rgdal", "SDMworkshop", "scales"
+)
+
+# Install any packages not already installed
+new_packages <- packages[!packages %in% installed.packages()[, "Package"]]
+if (length(new_packages) > 0) {
+  install.packages(new_packages)
+}
+
+# Load the packages
+lapply(packages, library, character.only = TRUE, quietly = TRUE)
+```
+
+## Step 1: Data Loading
+
+Load raster data representing different environmental variables. The function load_raster_data simplifies loading rasters from specified directories. Replace the placeholder paths with those where your environmental layers are stored.
+
+```{r data loading}
+# Function to load raster files from a directory based on file pattern
+load_raster_data <- function(path, pattern) {
+  files <- list.files(path, pattern = pattern, full.names = TRUE)
+  return(raster::stack(files))
+}
+
+# Paths to environmental data - replace these placeholders with actual paths
+path_climatic <- "path/to/climatic"
+path_soil <- "path/to/soil"
+path_topographic <- "path/to/topographic"
+
+# Execute the function to load raster data
+clim <- load_raster_data(path_climatic, "bio")
+soil <- load_raster_data(path_soil, ".tif$")
+topo <- load_raster_data(path_topographic, ".tif$")
+combined_stack <- raster::stack(clim, soil, topo)
+```
+
+## Step 2: Prepare Occurrence Data
+
+Validate and preprocess species occurrence data. This ensures accuracy in modeling by filtering out incomplete records and focusing on species with sufficient data points. Pleas ensure that the loaded occurence data has columns for decimallatitude, decimallongitude and species containing the species name.
+
+```{r load occurence data}
+# Load occurrence data, ensuring no missing latitude data
+species_data <- read.csv("path/to/occurrences.csv")  # replace with actual path
+valid_occurrences <- species_data[!is.na(species_data$decimallatitude), ]
+sp_points <- SpatialPoints(valid_occurrences[, c("decimallongitude", "decimallatitude")])
+
+# Aggregate data to summarize occurrences per species
+species_summary <- valid_occurrences %>%
+  group_by(speciesname) %>%
+  summarise(count = n(), nas = sum(is.na(decimallatitude)), .groups = "drop")
+
+# Filter species based on a minimum occurrence threshold
+filtered_species <- species_summary %>%
+  filter(count >= 3) %>%
+  pull(speciesname)
+```
+
+##  Step 3: Species-specific Modeling Loop
+
+The modeling process is executed on a species-by-species basis, ensuring that each species' data is handled individually. This section of the script loops through each species listed in `filtered_species`. For each species, it performs several key tasks:
+
+- **Sanitizing Species Name**: The species name is modified to ensure it is suitable for use in file paths and directory names. Spaces are replaced with underscores, and trailing periods are removed to prevent issues in file system operations.
+- **Creating Directories**: For each species, a base directory is created using its sanitized name. This directory will store all outputs related to the species, including model results and diagnostic plots. The `create_dirs` function is invoked to ensure the directory structure is in place, facilitating organized storage of output.
+
+This loop is fundamental for managing data processing at a granular level, allowing for detailed analysis and storage of results per species, which is crucial for large-scale ecological studies where outputs are species-dependent.
+
+Example:
+```{r}
+# Loop through each species for modeling
+for (sp in filtered_species) {
+  sp_sanitized <- gsub(" ", "_", sp)
+  sp_sanitized <- sub("\\.$", "", sp_sanitized)
+  base_path <- paste0(output_base_path, sp_sanitized)
+  create_dirs(base_path)
+  # Additional modeling steps follow and are can be placed inside the for loop if modelling ios performed for multiple species
+}
+```
+
+## Step 4: Prepare Occurrence Data for a Given Species
+
+The `prepare_occs` function is designed to process and clean occurrence data for a specific species. This function takes a species name and a data frame of valid occurrences, which must include columns for species, decimal longitude, and decimal latitude. It performs several key tasks:
+
+- **Filtering and Selecting Data**: The function filters occurrences for the specified species and selects relevant columns.
+- **Cleaning Coordinates**: Coordinates are cleaned using the `CoordinateCleaner` package to ensure accuracy and remove duplicates within the same grid cell.
+- **Generating Statistics**: The function calculates statistics such as total occurrences, number of occurrences with missing coordinates, duplicates, and the final count of unique occurrences.
+- **Creating Spatial Points**: It produces a `SpatialPoints` object for spatial analysis, representing the cleaned occurrences.
+
+An example usage is shown in the code snippet below, which demonstrates how to load species data, filter valid occurrences, and apply the `prepare_occs` function for a species named "Panthera leo":
+
+```{r prepare_occs example}
+# Prepare occurrence data
+    s1 <- system.time({
+      occs <- handle_error(prepare_occs(sp = sp, valid_occurrences = valid_occurrences))
+    })
+    if (!is.null(occs)) {
+      occs$time <- s1
+      handle_error(save(occs, file = paste0(base_path, "/data/occ_details_", sp_sanitized_2, ".RData")))
+    }
+```
+
+
+## Step 5: Background Point Generation for Habitat Suitability Modeling
+
+The `background_pt` function is a critical component of habitat suitability modeling, enabling the generation of background points from a user-defined calibration area. This function is designed to ensure that the environmental conditions sampled are representative of the broader area where the species may be present.
+
+### Key Features:
+- **Calibration Area:** Defines the sampling area using the `calib_area` function from the `flexsdm` package, based on occurrence data.
+- **Sampling Bias Correction:** Employs a density grid to correct sampling biases, using the `sp.kde` function from the `spatialEco` package.
+- **Integration with Spatial Data:** Facilitates the use of climatic, soil, and topographic data to refine background point generation.
+
+### Arguments:
+- `data`: An object that contains cleaned occurrence data, which is usually prepared using the `prepare_occs` function. This object must include geographic coordinates and can include additional environmental variables.
+- `rast`: A raster object that represents the environmental variable(s) over which the background points are to be generated. This could be climatic, soil, or topographic data.
+- `n_bg`: A numeric value that specifies the proportion of background points to generate relative to the non-NA cells of the raster layer. For instance, if set to 0.1, it generates background points equal to 10% of the count of non-NA raster cells.
+- `width_cal_area`: Specifies the buffer width around the occurrence points in kilometers when calculating the calibration area. This parameter helps in defining how far out from occurrence points the model should consider as potential habitat.
+
+### Output Description:
+The function returns a list with several components, crucial for further modeling steps:
+- `bg`: Dataframe containing the generated background points.
+- `pr_bg`: Dataframe combining presence data (from occurrences) and generated background points.
+- `points_pr_bg`: `SpatialPointsDataFrame` combining presence and background points, suitable for spatial analyses.
+- `area_M`: The generated calibration area as an `sf` object, which is useful for visualization and further spatial analysis.
+- `isna`: Dataframe listing points that contain NA values, which can help identify gaps or errors in data coverage.
+- `na_occs`: Dataframe of occurrence points that have NA values in environmental variables.
+- `na_bg`: Dataframe of background points that have NA values in environmental variables.
+
+
+Example usage:
+```{r backgroundpoints example}
+# Create background points
+    s2 <- system.time({
+      backgr <- handle_error(background_pt(data = occs, rast = clim[[1]], n_bg = 0.005))
+    })
+
+    if (!is.null(backgr)) {
+      backgr$time <- s2
+      handle_error(save(backgr, file = paste0(base_path, "/data/bg_", sp_sanitized_2, ".RData")))
+    }
+```
+
+
+## Setp 6: Preselecting Soil Layers with Tukey's HSD Test
+
+This function only works for soil layers from soilgrids.org. The `tukey_soil` function is designed to refine soil layer data for species distribution modeling by applying Tukey's Honest Significant Difference (HSD) test. This statistical method helps determine which soil layers significantly impact the distribution of different plant growth forms. Depending on the specified `growthform` (such as "small_annual", "annual", "shrub", or "tree"), the function selects relevant soil depth layers (e.g., 0-5 cm, 5-15 cm, etc.) and performs the test to identify significant differences among them.
+
+#### Function Parameters:
+- `pattern`: Specifies the soil depth layers to include. If not provided, the function selects a default pattern based on the growth form.
+- `points`: An object created by the `background_pt` function, which contains data on presence and background points.
+- `soil`: A raster stack of soil layers, ideally sourced from a comprehensive soil database like [SoilGrids](https://soilgrids.org/).
+- `growthform`: The plant growth form, which determines the default soil layer pattern if no specific pattern is provided.
+
+#### Returns:
+A modified raster stack that only includes the soil layers found to be significant in influencing species distribution for the specified growth form.
+
+#### Example Usage:
+```{r tukey_soil example}
+# Soil selection
+    s3 <- system.time({
+      soil_new <- handle_error(tukey_soil(pattern = NULL, points = backgr, soil = soil, growthform = "small_annual"))
+    })
+```
+
+
+### Selecting Environmental Variables for Ecological Groups
+
+The `select_variables_pergroup` function is pivotal in ecological modeling, as it facilitates the selection of the most relevant environmental variables from different groups of predictors, such as climatic or topographic data. This function employs biserial correlation and Variable Inflation Factor (VIF) analysis to discern which variables from a given raster stack significantly influence ecological outcomes and to ensure that the selected variables are not highly collinear.
+
+#### Function Description:
+- **Input**: Accepts a list of raster stacks (`groups`) where each stack represents a different group of predictors. It also requires an object (`data`) that typically comes from the `background_pt` function, containing background points and presence data.
+- **Process**: For each group, the function extracts relevant bioclimatic indices, performs biserial correlation to identify significant relationships, and checks for multicollinearity through VIF. This ensures variables chosen are both influential and independent.
+- **Output**: Returns a list where each element corresponds to a group and includes selected variables alongside their analysis metrics such as biserial correlation results and names of variables passing the VIF threshold.
+
+#### Example Usage:
+```{r select example}
+# Variable selection
+    groups <- handle_error(list(clim = clim, notclim = stack(topo, soil_new)))
+
+    s4 <- system.time({
+      select <- handle_error(select_variables_pergroup(groups = groups, data = backgr))
+    })
+
+    if (!is.null(select)) {
+      select$time <- s4
+      handle_error(save(select, file = paste0(base_path, "/data/var_selection_", sp_sanitized_2, ".RData")))
+    }
+```
+
+## Comprehensive Modeling Workflow in Habitat Suitability Analysis
+
+This section of the tutorial outlines a robust modeling workflow utilized within the habitat suitability analysis, using the `combine` script. This script orchestrates a series of operations to process, model, and evaluate habitat suitability across different ecological groups or species using various modeling techniques.
+
+### Workflow Overview:
+The process begins by initializing a list `combine` to store outputs for each group, ensuring that all results are organized and accessible. For each group:
+
+1. **Data Preparation**: The function `test_train_aoi` partitions the data into training and testing subsets while maintaining a specified area of interest around the occurrences. This step also assesses the time taken for data preparation.
+
+2. **Extrapolation Risk Assessment**: Before modeling, the script evaluates the risk of extrapolation by analyzing how well the environmental conditions of the training data cover the conditions in the predictive area.
+
+3. **Model Fitting**: Multiple models are fitted using different statistical techniques such as Maxent, Random Forest, GAM, Lasso, and BRT. Each model fitting step is timed, and extrapolation risks are assessed for each.
+
+4. **Output Handling**: Results from each model, including raster outputs and evaluation metrics (like AUC), are saved for further analysis. Additionally, any errors encountered during model fitting are handled gracefully to ensure the workflow continues uninterrupted.
+
+5. **Ensemble Modeling**: After individual models are fitted, an ensemble model is created to integrate the predictive power of all models, potentially increasing the accuracy and robustness of the habitat suitability predictions.
+
+6. **Result Compilation and Saving**: Finally, raster predictions from each model, along with the ensemble predictions, are stacked and saved for further ecological analysis or reporting.
+
+```{r modelling}
+# Initialize a list to store model outputs for each group
+combine <- vector(mode = "list", length = length(groups))
+names(combine) <- names(groups)
+
+for (i in 1:length(combine)) {
+  # Select predictor variables for the current group
+  pred <- combined_stack[[select[[i]]$vifnames]]
+
+  # Time the process of training and testing data preparation
+  s5 <- system.time({
+    tta <- handle_error(test_train_aoi(
+      data = backgr,   # Background data containing environmental variables
+      predictors = pred,  # Predictors selected for the current model
+      partition = 0.8,    # 80% of the data used for training
+      aoi_width = 100000  # Area of interest width for model applicability here 100 km around presence and backgroundpoints
+    ))
+  })
+
+  # Save the processed data
+  if (!is.null(tta)) {
+    tta$time <- s5
+    handle_error(save(tta, file = paste0(base_path, "/data/train_test_aoi_", names(select)[[i]], "_", sp_sanitized_2, ".RData")))
+  }
+
+  # Assess the extrapolation risk for the model
+  rast_ext <- handle_error(extrapolation_risk_assessment(pred = pred, backgr = backgr, st = combined_stack, test_train = tta))
+  handle_error(writeRaster(rast_ext, file = paste0(base_path, "/data/extrapolationrisk_1981-2011_", names(select)[[i]], "_", sp_sanitized_2, ".tif"), overwrite = TRUE))
+
+  # Fit models and assess their performance
+  s11 <- system.time({
+    max <- handle_error(fit_max(training_test = tta, backgr.pt = backgr$bg, rast_ext = rast_ext, method = NULL))
+  })
+
+  # Store outputs and metrics for each model
+  if (!is.null(max)) {
+    max$time <- s11
+    handle_error(save(max, file = paste0(base_path, "/models/max_model_", names(select)[[i]], "_", sp_sanitized_2, ".RData")))
+    combine[[i]]$max <- list(raster_test = max$eval$raster_test, raster_full = max$full$raster_full, predictions = max$eval$pred, eval_AUC = max$eval$AUC)
+  }
+
+      # Fit Random Forest model
+      s7 <- system.time({
+        rf <- handle_error(fit_rf(
+          train_test = tta,
+          ntrees = 1000,
+          numbs = numbs,
+          rast_ext = rast_ext
+        ))
+      })
+      if (!is.null(rf)) {
+        rf$time <- s7
+        handle_error(save(rf, file = paste0(
+          base_path, "/models/rf_model_", names(select)[[i]], "_", sp_sanitized_2, ".RData"
+        )))
+        combine[[i]]$rf$raster$raster_test <- rf$eval$raster_test
+        combine[[i]]$rf$raster$raster_full <- rf$full$raster_full
+        combine[[i]]$rf$predictions <- rf$eval$pred$predictions[, "1"]
+        combine[[i]]$rf$eval$AUC <- rf$eval$AUC
+      }
+
+      # Fit GAM model
+      s8 <- system.time({
+        gam <- handle_error(fit_gam(
+          train_test = tta,
+          numbs = numbs,
+          rast_ext = rast_ext
+        ))
+      })
+      if (!is.null(gam)) {
+        gam$time <- s8
+        handle_error(save(gam, file = paste0(
+          base_path, "/models/gam_model_", names(select)[[i]], "_", sp_sanitized_2, ".RData"
+        )))
+        combine[[i]]$gam$raster$raster_test <- gam$eval$raster_test
+        combine[[i]]$gam$raster$raster_full <- gam$full$raster_full
+        combine[[i]]$gam$predictions <- gam$eval$pred
+        combine[[i]]$gam$eval$AUC <- gam$eval$AUC
+      }
+
+      # Fit Lasso model
+      s9 <- system.time({
+        lasso <- handle_error(fit_lasso(
+          training_test = tta,
+          numbs = numbs,
+          rast_ext = rast_ext
+        ))
+      })
+      
+      if (!is.null(lasso)) {
+        lasso$time <- s9
+        handle_error(save(lasso, file = paste0(
+          base_path, "/models/lasso_model_", names(select)[[i]], "_", sp_sanitized_2, ".RData"
+        )))
+        combine[[i]]$lasso$raster$raster_test <- lasso$eval$raster_test
+        combine[[i]]$lasso$raster$raster_full <- lasso$full$raster_full
+        combine[[i]]$lasso$predictions <- lasso$eval$pred
+        combine[[i]]$lasso$eval$AUC <- lasso$eval$AUC
+      }
+
+      # Fit BRT model
+      s10 <- system.time({
+        brt <- handle_error(fit_brt(
+          training_test=tta,
+          numbs = numbs,
+          rast_ext = rast_ext
+        ))
+      })
+      
+      if (!is.null(brt)) {
+        brt$time <- s10
+        handle_error(save(brt, file = paste0(
+          base_path, "/models/brt_model_", names(select)[[i]], "_", sp_sanitized_2, ".RData"
+        )))
+        combine[[i]]$brt$raster$raster_test <- brt$eval$raster_test
+        combine[[i]]$brt$raster$raster_full <- brt$full$raster_full
+        combine[[i]]$brt$predictions <- brt$eval$pred
+        combine[[i]]$brt$eval$AUC <- brt$eval$AUC
+      }
+
+  # After fitting all models, create an ensemble model combining all predictive outputs
+  ensemble <- create_ensemble_model(combine, i, tta)
+  handle_error(save(ensemble, file = paste0(base_path, "/models/ensemble_model_", names(select)[[i]], "_", sp_sanitized_2, ".RData")))
+  combine[[i]]$ensemble <- list(raster = ensemble$rast_pred, predictions = ensemble$pred)
+
+  # Combine all raster predictions into a stack and save
+  s <- stack(brt$full$raster_full, rf$full$raster_full, gam$full$raster_full, lasso$full$raster_full, max$full$raster_full, ensemble$rast_pred)
+  names(s) <- c("brt", "rf", "gam", "lasso", "max", "ensemble")
+  for (p in 1:length(s@layers)) {
+    terra::writeRaster(s[[p]], paste0(base_path, "/1981-2010/", names(s)[p], names(select)[[i]], "_", sp_sanitized_2, ".tif"))
+  }
+}
+
